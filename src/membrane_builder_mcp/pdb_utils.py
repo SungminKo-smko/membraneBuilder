@@ -1,6 +1,11 @@
 """PDB file parsing and protein structure analysis utilities for Packmol membrane builder."""
 
+import logging
 import numpy as np
+
+logger = logging.getLogger(__name__)
+
+DEFAULT_BILAYER_THICKNESS = 40.0
 
 
 def parse_pdb(pdb_path: str) -> dict:
@@ -18,21 +23,49 @@ def parse_pdb(pdb_path: str) -> dict:
     atoms = []
 
     with open(pdb_path, "r") as f:
-        for line in f:
+        for lineno, line in enumerate(f, start=1):
             record = line[:6].strip()
             if record not in ("ATOM", "HETATM"):
                 continue
 
-            atom = {
-                "name": line[12:16].strip(),
-                "resname": line[17:20].strip(),
-                "chain": line[21:22].strip(),
-                "resnum": int(line[22:26].strip()),
-                "x": float(line[30:38].strip()),
-                "y": float(line[38:46].strip()),
-                "z": float(line[46:54].strip()),
-            }
-            atoms.append(atom)
+            # Skip lines that are too short to contain coordinate fields
+            if len(line) < 54:
+                logger.warning(
+                    "parse_pdb: skipping short line %d (length %d): %r",
+                    lineno, len(line), line.rstrip(),
+                )
+                continue
+
+            try:
+                resnum_raw = line[22:26].strip()
+                # Strip insertion code suffix (e.g. "100A" -> 100)
+                resnum = int("".join(c for c in resnum_raw if c.isdigit() or c == "-"))
+                atom = {
+                    "name": line[12:16].strip(),
+                    "resname": line[17:20].strip(),
+                    "chain": line[21:22].strip(),
+                    "resnum": resnum,
+                    "x": float(line[30:38].strip()),
+                    "y": float(line[38:46].strip()),
+                    "z": float(line[46:54].strip()),
+                }
+                atoms.append(atom)
+            except (ValueError, IndexError) as exc:
+                logger.warning(
+                    "parse_pdb: skipping unparseable line %d: %r (%s)",
+                    lineno, line.rstrip(), exc,
+                )
+                continue
+
+    # Handle empty PDB: return zero center and zero bounding box without crashing
+    if not atoms:
+        logger.warning("parse_pdb: no atoms found in %r", pdb_path)
+        zero3 = (0.0, 0.0, 0.0)
+        return {
+            "atoms": atoms,
+            "center": zero3,
+            "bbox": {"min": zero3, "max": zero3, "size": zero3},
+        }
 
     coords = np.array([[a["x"], a["y"], a["z"]] for a in atoms])
 
@@ -92,12 +125,18 @@ def estimate_cross_section(atoms: list, z_center: float, thickness: float) -> fl
     return len(unique_cells) * cell_area
 
 
-def suggest_membrane_params(pdb_path: str, xy_padding: float = 15.0) -> dict:
+def suggest_membrane_params(
+    pdb_path: str,
+    xy_padding: float = 15.0,
+    bilayer_thickness: float = DEFAULT_BILAYER_THICKNESS,
+) -> dict:
     """Suggest membrane building parameters based on protein structure analysis.
 
     Args:
         pdb_path: Path to the PDB file.
         xy_padding: Padding to add on each side in the XY plane (Angstroms).
+        bilayer_thickness: Thickness of the lipid bilayer (Angstroms). Must match
+            the ``bilayer_thickness`` used in ``build_membrane`` (default 40.0 Å).
 
     Returns:
         Dictionary with suggested parameters:
@@ -116,7 +155,9 @@ def suggest_membrane_params(pdb_path: str, xy_padding: float = 15.0) -> dict:
     membrane_x = bbox["size"][0] + 2.0 * xy_padding
     membrane_y = bbox["size"][1] + 2.0 * xy_padding
 
-    cross_section = estimate_cross_section(atoms, z_center=center[2], thickness=10.0)
+    cross_section = estimate_cross_section(
+        atoms, z_center=center[2], thickness=bilayer_thickness
+    )
 
     membrane_area = membrane_x * membrane_y
     area_per_lipid = 65.0  # approximate area per lipid in Angstroms squared

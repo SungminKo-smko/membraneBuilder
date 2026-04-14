@@ -102,7 +102,8 @@ def generate_packmol_input(
     membrane_y: float,
     z_center: float,
     bilayer_thickness: float,
-    water_padding: float,
+    water_padding_upper: float,
+    water_padding_lower: float,
     water_density: float,
     tolerance: float,
     n_water_upper: int,
@@ -118,7 +119,8 @@ def generate_packmol_input(
         membrane_y: Membrane Y dimension in Angstroms.
         z_center: Z coordinate of the bilayer center.
         bilayer_thickness: Thickness of the lipid bilayer in Angstroms.
-        water_padding: Water layer thickness above/below bilayer in Angstroms.
+        water_padding_upper: Water layer thickness above the upper leaflet in Angstroms.
+        water_padding_lower: Water layer thickness below the lower leaflet in Angstroms.
         water_density: Water density in molecules per cubic Angstrom.
         tolerance: Minimum distance between molecules in Angstroms.
         n_water_upper: Number of water molecules above the upper leaflet.
@@ -135,10 +137,10 @@ def generate_packmol_input(
 
     z_upper_top = z_center + half_thickness
     z_lower_bottom = z_center - half_thickness
-    z_water_top = z_upper_top + water_padding
-    z_water_bottom = z_lower_bottom - water_padding
+    z_water_top = z_upper_top + water_padding_upper
+    z_water_bottom = z_lower_bottom - water_padding_lower
 
-    water_pdb_path = str(LIPIDS_DIR / "water.pdb")
+    water_pdb_path = str(Path(LIPIDS_DIR / "water.pdb").resolve())
 
     lines: list[str] = []
     lines.append(f"tolerance {tolerance:.1f}")
@@ -161,7 +163,7 @@ def generate_packmol_input(
     for lipid_name, count in lipid_counts.items():
         if count <= 0:
             continue
-        upper_pdb = str(get_lipid_pdb_path(lipid_name, "upper"))
+        upper_pdb = str(get_lipid_pdb_path(lipid_name, "upper").resolve())
         lines.append(f"# {lipid_name} upper leaflet")
         lines.append(f"structure {upper_pdb}")
         lines.append(f"  number {count}")
@@ -176,7 +178,7 @@ def generate_packmol_input(
     for lipid_name, count in lipid_counts.items():
         if count <= 0:
             continue
-        lower_pdb = str(get_lipid_pdb_path(lipid_name, "lower"))
+        lower_pdb = str(get_lipid_pdb_path(lipid_name, "lower").resolve())
         lines.append(f"# {lipid_name} lower leaflet")
         lines.append(f"structure {lower_pdb}")
         lines.append(f"  number {count}")
@@ -256,6 +258,13 @@ async def build_membrane(
     if lipid_composition is None:
         lipid_composition = dict(DEFAULT_LIPID_COMPOSITION)
 
+    # Step 0: Validate lipid composition fractions
+    total_fraction = sum(lipid_composition.values())
+    if not (0.99 <= total_fraction <= 1.01):
+        raise ValueError(
+            f"lipid_composition fractions must sum to ~1.0, got {total_fraction:.4f}"
+        )
+
     # Step a: Parse protein PDB
     pdb_data = parse_pdb(protein_pdb_path)
     atoms = pdb_data["atoms"]
@@ -280,9 +289,27 @@ async def build_membrane(
         lipid_area=lipid_area,
     )
 
-    # Step d: Calculate water molecule counts
-    water_volume_upper = membrane_x_size * membrane_y_size * water_padding
-    water_volume_lower = membrane_x_size * membrane_y_size * water_padding
+    # Step d: Calculate adaptive water padding based on protein protrusion
+    bilayer_top = z_center + bilayer_thickness / 2.0
+    bilayer_bottom = z_center - bilayer_thickness / 2.0
+
+    if atoms:
+        protein_z_coords = [a["z"] for a in atoms]
+        protein_z_max = max(protein_z_coords)
+        protein_z_min = min(protein_z_coords)
+    else:
+        protein_z_max = z_center
+        protein_z_min = z_center
+
+    upper_protrusion = max(0.0, protein_z_max - bilayer_top)
+    lower_protrusion = max(0.0, bilayer_bottom - protein_z_min)
+
+    water_padding_upper = max(water_padding, upper_protrusion + 10.0)
+    water_padding_lower = max(water_padding, lower_protrusion + 10.0)
+
+    # Calculate water molecule counts using adaptive padding
+    water_volume_upper = membrane_x_size * membrane_y_size * water_padding_upper
+    water_volume_lower = membrane_x_size * membrane_y_size * water_padding_lower
     n_water_upper = int(math.floor(water_volume_upper * water_density))
     n_water_lower = int(math.floor(water_volume_lower * water_density))
 
@@ -299,7 +326,8 @@ async def build_membrane(
         membrane_y=membrane_y_size,
         z_center=z_center,
         bilayer_thickness=bilayer_thickness,
-        water_padding=water_padding,
+        water_padding_upper=water_padding_upper,
+        water_padding_lower=water_padding_lower,
         water_density=water_density,
         tolerance=tolerance,
         n_water_upper=n_water_upper,
@@ -342,7 +370,9 @@ async def build_membrane(
 
             # Step j: Check convergence
             success_markers = ("Success", "ENDED WITHOUT SYMMETRY")
-            packmol_success = any(marker in stdout for marker in success_markers)
+            packmol_success = result.returncode == 0 or any(
+                marker in stdout for marker in success_markers
+            )
 
             # Last 20 lines of stdout
             stdout_lines = stdout.strip().splitlines()
@@ -363,12 +393,11 @@ async def build_membrane(
             logger.error("Packmol execution failed: %s", exc)
 
     # Step k: Build result dict
-    half_thickness = bilayer_thickness / 2.0
     box_dimensions = {
         "x": membrane_x_size,
         "y": membrane_y_size,
-        "z_min": z_center - half_thickness - water_padding,
-        "z_max": z_center + half_thickness + water_padding,
+        "z_min": bilayer_bottom - water_padding_lower,
+        "z_max": bilayer_top + water_padding_upper,
     }
 
     return {

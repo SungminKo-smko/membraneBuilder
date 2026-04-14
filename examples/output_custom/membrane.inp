@@ -1,0 +1,59 @@
+tolerance 2.0
+filetype pdb
+output /Users/kosungmin/workspace/membraneBuilder/examples/output_custom/membrane.pdb
+seed -1
+
+# Protein (fixed)
+structure /Users/kosungmin/workspace/membraneBuilder/examples/7CFN_clean.pdb
+  number 1
+  fixed 0.000 0.000 79.741 0. 0. 0.
+  center
+end structure
+
+# POPC upper leaflet
+structure /Users/kosungmin/workspace/membraneBuilder/src/membrane_builder_mcp/lipids/POPC_upper.pdb
+  number 72
+  inside box -48.753 -66.796 79.741 48.753 66.796 99.741
+end structure
+
+# POPE upper leaflet
+structure /Users/kosungmin/workspace/membraneBuilder/src/membrane_builder_mcp/lipids/POPE_upper.pdb
+  number 43
+  inside box -48.753 -66.796 79.741 48.753 66.796 99.741
+end structure
+
+# cholesterol upper leaflet
+structure /Users/kosungmin/workspace/membraneBuilder/src/membrane_builder_mcp/lipids/cholesterol_upper.pdb
+  number 28
+  inside box -48.753 -66.796 79.741 48.753 66.796 99.741
+end structure
+
+# POPC lower leaflet
+structure /Users/kosungmin/workspace/membraneBuilder/src/membrane_builder_mcp/lipids/POPC_lower.pdb
+  number 72
+  inside box -48.753 -66.796 59.741 48.753 66.796 79.741
+end structure
+
+# POPE lower leaflet
+structure /Users/kosungmin/workspace/membraneBuilder/src/membrane_builder_mcp/lipids/POPE_lower.pdb
+  number 43
+  inside box -48.753 -66.796 59.741 48.753 66.796 79.741
+end structure
+
+# cholesterol lower leaflet
+structure /Users/kosungmin/workspace/membraneBuilder/src/membrane_builder_mcp/lipids/cholesterol_lower.pdb
+  number 28
+  inside box -48.753 -66.796 59.741 48.753 66.796 79.741
+end structure
+
+# Water upper (above upper leaflet)
+structure /Users/kosungmin/workspace/membraneBuilder/src/membrane_builder_mcp/lipids/water.pdb
+  number 19746
+  inside box -48.753 -66.796 99.741 48.753 66.796 145.128
+end structure
+
+# Water lower (below lower leaflet)
+structure /Users/kosungmin/workspace/membraneBuilder/src/membrane_builder_mcp/lipids/water.pdb
+  number 18218
+  inside box -48.753 -66.796 17.866 48.753 66.796 59.741
+end structure
