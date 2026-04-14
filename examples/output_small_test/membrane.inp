@@ -1,35 +1,35 @@
 tolerance 2.5
 filetype pdb
-output /Users/kosungmin/workspace/membraneBuilder/examples/output_default/membrane.pdb
+output /Users/kosungmin/workspace/membraneBuilder/examples/output_small_test/membrane.pdb
 seed -1
 
 # Protein (fixed)
-structure /Users/kosungmin/workspace/membraneBuilder/examples/7CFN_clean.pdb
+structure /Users/kosungmin/workspace/membraneBuilder/tests/fixtures/sample_protein.pdb
   number 1
-  fixed 0.000 0.000 79.741 0. 0. 0.
+  fixed 0.000 0.000 -11.180 0. 0. 0.
   center
 end structure
 
 # POPC upper leaflet
 structure /Users/kosungmin/workspace/membraneBuilder/src/membrane_builder_mcp/lipids/POPC_upper.pdb
-  number 144
-  inside box -48.753 -66.796 79.741 48.753 66.796 99.741
+  number 25
+  inside box -24.750 -17.800 -11.180 24.750 17.800 8.820
 end structure
 
 # POPC lower leaflet
 structure /Users/kosungmin/workspace/membraneBuilder/src/membrane_builder_mcp/lipids/POPC_lower.pdb
-  number 144
-  inside box -48.753 -66.796 59.741 48.753 66.796 79.741
+  number 25
+  inside box -24.750 -17.800 -31.180 24.750 17.800 -11.180
 end structure
 
 # Water upper (above upper leaflet)
 structure /Users/kosungmin/workspace/membraneBuilder/src/membrane_builder_mcp/lipids/water.pdb
-  number 19746
-  inside box -48.753 -66.796 99.741 48.753 66.796 145.128
+  number 588
+  inside box -24.750 -17.800 8.820 24.750 17.800 18.820
 end structure
 
 # Water lower (below lower leaflet)
 structure /Users/kosungmin/workspace/membraneBuilder/src/membrane_builder_mcp/lipids/water.pdb
-  number 18218
-  inside box -48.753 -66.796 17.866 48.753 66.796 59.741
+  number 588
+  inside box -24.750 -17.800 -41.180 24.750 17.800 -31.180
 end structure

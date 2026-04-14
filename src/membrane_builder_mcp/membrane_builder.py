@@ -354,14 +354,17 @@ async def build_membrane(
         packmol_log = "Packmol is not installed. Please install it and run manually."
     else:
         # Step i: Run packmol via asyncio.to_thread
+        # Packmol's Fortran I/O requires a seekable file, so we redirect
+        # from the .inp file instead of piping via stdin.
         def _run_packmol() -> subprocess.CompletedProcess:
-            return subprocess.run(
-                ["packmol"],
-                input=inp_content,
-                capture_output=True,
-                text=True,
-                timeout=600,
-            )
+            with open(inp_file_path, "r") as inp_f:
+                return subprocess.run(
+                    ["packmol"],
+                    stdin=inp_f,
+                    capture_output=True,
+                    text=True,
+                    timeout=3600,
+                )
 
         try:
             result = await asyncio.to_thread(_run_packmol)
