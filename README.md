@@ -1,59 +1,57 @@
 # membrane-builder-mcp
 
-An MCP (Model Context Protocol) server that builds lipid bilayer membranes around proteins using [Packmol](https://m3g.github.io/packmol/). Provide a protein PDB file and the server automatically calculates membrane dimensions, generates Packmol input, and produces a solvated membrane system.
+An MCP (Model Context Protocol) server that builds lipid bilayer membrane systems around proteins using AmberTools25 `packmol-memgen`. Provide a protein PDB file and the server invokes `packmol-memgen` to embed the protein in a solvated, ionized membrane, then optionally converts the output to GROMACS format via ParmEd.
 
 ## Features
 
-- Automatic membrane sizing based on protein bounding box
-- Configurable lipid composition with support for mixed bilayers
-- Built-in lipid library: POPC, POPE, DPPC, and cholesterol
-- Protein structure analysis with suggested membrane parameters
-- Water box generation with adjustable padding and density
-- Runs as a stdio-based MCP server compatible with Claude Desktop and Claude Code
+- Wraps the AmberTools25 `packmol-memgen` CLI as an MCP server
+- Supports 3000+ lipid types from the Lipid21 force field library
+- Mixed bilayer composition with configurable leaflet ratios
+- Automatic solvation and ion placement
+- Optional AMBER to GROMACS format conversion (ParmEd)
+- Protein structure analysis tool
+
+## Project Structure
+
+```
+src/membrane_builder_mcp/
+├── server.py           - MCP server exposing 4 tools
+├── membrane_builder.py - packmol-memgen CLI wrapper
+└── converter.py        - AMBER to GROMACS conversion (ParmEd)
+```
 
 ## Prerequisites
 
 - Python 3.10 or later
-- [Packmol](https://m3g.github.io/packmol/download.shtml) installed and available on your `PATH`
-- [uv](https://docs.astral.sh/uv/) package manager
+- Miniconda or Anaconda
+- AmberTools25 installed in a conda environment
+
+### Installing AmberTools25
+
+```bash
+conda create --name AmberTools25 python=3.12
+conda activate AmberTools25
+conda config --add channels conda-forge
+conda config --set channel_priority strict
+conda install dacase::ambertools-dac=25
+```
 
 ## Installation
 
 ```bash
-git clone https://github.com/<your-org>/membrane-builder-mcp.git
-cd membrane-builder-mcp
-uv sync
+git clone https://github.com/SungminKo-smko/membraneBuilder.git
+cd membraneBuilder
+pip install -e .
 ```
 
-To include development dependencies (pytest):
+## Environment Variables
 
-```bash
-uv sync --extra dev
-```
+| Variable | Default | Description |
+|---|---|---|
+| `CONDA_BASE` | `~/miniconda3` | Path to Miniconda installation |
+| `MEMBRANE_CONDA_ENV` | `AmberTools25` | Name of the AmberTools conda environment |
 
-## Packmol Installation
-
-Packmol must be installed separately. Download and build instructions are available at:
-
-https://m3g.github.io/packmol/download.shtml
-
-Verify your installation:
-
-```bash
-packmol < /dev/null
-```
-
-## Usage
-
-### Running the MCP Server
-
-```bash
-python -m membrane_builder_mcp.server
-```
-
-The server communicates over stdio using the MCP protocol.
-
-### MCP Configuration
+## MCP Configuration
 
 Add the following to your Claude Desktop or Claude Code MCP configuration:
 
@@ -61,84 +59,95 @@ Add the following to your Claude Desktop or Claude Code MCP configuration:
 {
   "mcpServers": {
     "membrane-builder": {
-      "command": "uv",
-      "args": ["--directory", "/path/to/membrane-builder-mcp", "run", "python", "-m", "membrane_builder_mcp.server"]
+      "command": "python",
+      "args": ["-m", "membrane_builder_mcp.server"],
+      "env": {
+        "CONDA_BASE": "/path/to/miniconda3"
+      }
     }
   }
 }
 ```
 
-Replace `/path/to/membrane-builder-mcp` with the absolute path to this repository.
+Replace `/path/to/miniconda3` with the absolute path to your Miniconda or Anaconda installation.
 
 ## Tools
 
 ### build_membrane
 
-Build a lipid bilayer membrane around a protein using Packmol.
+The primary tool. Embeds a protein in a lipid bilayer, adds water and ions, and returns AMBER topology and coordinate files. Optionally converts output to GROMACS format.
 
 | Parameter | Type | Default | Description |
 |---|---|---|---|
-| `protein_pdb_path` | `str` | (required) | Path to the protein PDB file |
-| `output_dir` | `str` | `"./output"` | Output directory for generated files |
-| `lipid_composition` | `dict[str, float]` | `{"POPC": 1.0}` | Lipid composition ratios (values must sum to 1.0) |
-| `membrane_x_size` | `float` | auto | Membrane X dimension in angstroms |
-| `membrane_y_size` | `float` | auto | Membrane Y dimension in angstroms |
-| `bilayer_thickness` | `float` | `40.0` | Bilayer thickness in angstroms |
-| `water_padding` | `float` | `15.0` | Water layer padding in angstroms |
-| `lipid_area` | `float` | `65.0` | Area per lipid in angstroms squared |
-| `water_density` | `float` | `0.0334` | Water density in molecules per cubic angstrom |
-| `tolerance` | `float` | `2.0` | Packmol distance tolerance in angstroms |
+| `protein_pdb_path` | `str` | required | Path to the input protein PDB file |
+| `lipids` | `str` | `"POPC"` | Lipid name(s), colon-separated for mixed bilayers (e.g. `"DOPE:DOPG"`) |
+| `ratio` | `str` | `"1"` | Molar ratio(s) matching the lipids list (e.g. `"3:1"`) |
+| `dist` | `float` | `10.0` | Minimum distance in angstroms from protein to bilayer edge |
+| `dist_wat` | `float` | `17.5` | Water layer thickness in angstroms |
+| `salt` | `float` | `0.15` | Salt concentration in mol/L |
+| `parametrize` | `bool` | `true` | Run tleap to generate AMBER topology files |
+| `ffprot` | `str` | `"ff19SB"` | Protein force field |
+| `ffwat` | `str` | `"tip3p"` | Water model |
+| `fflip` | `str` | `"lipid21"` | Lipid force field |
+| `preoriented` | `bool` | `false` | Skip OPM orientation step if protein is already oriented |
+| `keep_ligands` | `bool` | `false` | Retain non-standard residues/ligands in the system |
+| `convert_to_gromacs` | `bool` | `false` | Convert AMBER output to GROMACS `.gro`/`.top` via ParmEd |
+
+Output files generated:
+
+- `bilayer_*.pdb` - full membrane system PDB
+- `*_lipid.prmtop` / `*_lipid.inpcrd` - AMBER topology and coordinates
+- `system.gro` / `system.top` - GROMACS format (when `convert_to_gromacs=true`)
 
 ### list_available_lipids
 
-List all available lipid types with their properties (description, headgroup, atom count, and area per lipid). Takes no parameters.
+Returns the list of lipid types supported by `packmol-memgen` (3000+ entries from the Lipid21 library). Takes no parameters.
 
-### analyze_protein_structure
+### analyze_protein
 
-Analyze a protein PDB file and suggest membrane building parameters.
+Analyzes a protein PDB file and reports atom count, residue count, chain identifiers, and bounding box dimensions. Useful for reviewing the structure before building a membrane.
 
 | Parameter | Type | Description |
 |---|---|---|
 | `protein_pdb_path` | `str` | Path to the protein PDB file |
 
-## Example Usage Scenarios
+### convert_to_gromacs
 
-**Simple membrane with defaults** -- provide only the protein PDB file and the server auto-calculates dimensions and uses a pure POPC bilayer:
+Standalone AMBER to GROMACS conversion using ParmEd. Converts an existing `.prmtop`/`.inpcrd` pair to `.gro`/`.top`.
 
-```
-build_membrane(protein_pdb_path="/data/1abc.pdb")
-```
+| Parameter | Type | Description |
+|---|---|---|
+| `prmtop_path` | `str` | Path to the AMBER topology file |
+| `inpcrd_path` | `str` | Path to the AMBER coordinate file |
+| `output_dir` | `str` | Directory for GROMACS output files |
 
-**Mixed lipid composition** -- build a membrane with 70% POPC and 30% POPE:
+## Example Usage
 
-```
-build_membrane(
-    protein_pdb_path="/data/1abc.pdb",
-    lipid_composition={"POPC": 0.7, "POPE": 0.3}
-)
-```
-
-**Analyze first, then build** -- inspect the protein structure to review suggested parameters before building:
+Building a pure POPC bilayer (default settings):
 
 ```
-analyze_protein_structure(protein_pdb_path="/data/1abc.pdb")
+build_membrane(protein_pdb_path="/data/protein.pdb")
 ```
 
-**Custom dimensions** -- specify explicit membrane size and increased water padding:
+Building a mixed DOPE:DOPG bilayer at 3:1 ratio with GROMACS output:
 
 ```
 build_membrane(
-    protein_pdb_path="/data/1abc.pdb",
-    membrane_x_size=120.0,
-    membrane_y_size=120.0,
-    water_padding=20.0
+    protein_pdb_path="/data/protein.pdb",
+    lipids="DOPE:DOPG",
+    ratio="3:1",
+    convert_to_gromacs=true
 )
 ```
 
-## Running Tests
+Equivalent direct CLI invocation:
 
 ```bash
-uv run pytest tests/ -v
+# Pure POPC
+packmol-memgen --pdb protein.pdb --lipids POPC --ratio 1 --parametrize
+
+# Mixed bilayer
+packmol-memgen --pdb protein.pdb --lipids DOPE:DOPG --ratio 3:1 --parametrize
 ```
 
 ## License

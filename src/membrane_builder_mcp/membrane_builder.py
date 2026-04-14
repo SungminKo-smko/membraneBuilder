@@ -1,386 +1,445 @@
-"""Core module for generating Packmol input files and building lipid bilayer membranes."""
+"""membrane_builder.py — packmol-memgen CLI wrapper.
 
-from __future__ import annotations
+Wraps AmberTools25's ``packmol-memgen`` command so it can be called from the
+MCP server as plain async Python functions.  All heavy work is offloaded to a
+thread-pool via ``asyncio.to_thread`` so the event loop never blocks.
+"""
 
 import asyncio
 import logging
-import math
 import os
+import re
 import shutil
 import subprocess
 from pathlib import Path
 
-from .defaults import (
-    DEFAULT_BILAYER_THICKNESS,
-    DEFAULT_LIPID_AREA,
-    DEFAULT_LIPID_COMPOSITION,
-    DEFAULT_TOLERANCE,
-    DEFAULT_WATER_DENSITY,
-    DEFAULT_WATER_PADDING,
-    DEFAULT_XY_PADDING,
-    LIPID_DB,
-)
-from .pdb_utils import estimate_cross_section, parse_pdb
-
 logger = logging.getLogger(__name__)
 
-LIPIDS_DIR = Path(__file__).parent / "lipids"
+# ---------------------------------------------------------------------------
+# Conda / environment configuration
+# ---------------------------------------------------------------------------
+
+CONDA_ENV = os.environ.get("MEMBRANE_CONDA_ENV", "AmberTools25")
+CONDA_BASE = Path(os.environ.get("CONDA_BASE", str(Path.home() / "miniconda3")))
 
 
-def get_lipid_pdb_path(lipid_name: str, leaflet: str) -> Path:
-    """Return the path to a lipid PDB template file.
+ENV_BIN = CONDA_BASE / "envs" / CONDA_ENV / "bin"
 
-    Args:
-        lipid_name: Lipid type key as it appears in LIPID_DB (e.g. "POPC", "cholesterol").
-        leaflet: Which leaflet -- "upper" or "lower".
 
-    Returns:
-        Absolute path to the lipid PDB file.
+def _get_env() -> dict[str, str]:
+    """Return an environment dict with the conda env's bin/ prepended to PATH.
 
-    Raises:
-        ValueError: If the lipid name is unknown or the leaflet is invalid.
-        FileNotFoundError: If the template PDB file does not exist.
+    This avoids ``conda run`` which sometimes fails to propagate PATH correctly,
+    causing tools like ``reduce`` or ``packmol`` to not be found.
     """
-    if lipid_name not in LIPID_DB:
-        raise ValueError(
-            f"Unknown lipid '{lipid_name}'. Available: {list(LIPID_DB.keys())}"
-        )
-    if leaflet not in ("upper", "lower"):
-        raise ValueError(f"Leaflet must be 'upper' or 'lower', got '{leaflet}'")
-
-    filename = f"{lipid_name}_{leaflet}.pdb"
-    path = LIPIDS_DIR / filename
-
-    if not path.exists():
-        raise FileNotFoundError(f"Lipid template not found: {path}")
-
-    return path
+    env = os.environ.copy()
+    env["PATH"] = f"{ENV_BIN}:{env.get('PATH', '')}"
+    # AmberTools programs also look for AMBERHOME
+    amber_home = CONDA_BASE / "envs" / CONDA_ENV
+    env["AMBERHOME"] = str(amber_home)
+    return env
 
 
-def calculate_lipid_counts(
-    membrane_x: float,
-    membrane_y: float,
-    cross_section: float,
-    lipid_composition: dict[str, float],
-    lipid_area: float,
-) -> dict[str, int]:
-    """Calculate the number of each lipid type per leaflet.
+def _get_executable(name: str) -> str:
+    """Return the absolute path to a binary inside the conda env."""
+    exe = ENV_BIN / name
+    if exe.is_file() and os.access(exe, os.X_OK):
+        return str(exe)
+    raise FileNotFoundError(f"{name} not found in {ENV_BIN}")
 
-    Args:
-        membrane_x: Membrane X dimension in Angstroms.
-        membrane_y: Membrane Y dimension in Angstroms.
-        cross_section: Protein cross-sectional area in Angstroms squared.
-        lipid_composition: Dict mapping lipid name to its mole fraction (must sum to ~1.0).
-        lipid_area: Area per lipid in Angstroms squared.
 
-    Returns:
-        Dict mapping lipid name to count per leaflet (e.g. {"POPC": 150, "POPE": 50}).
+# ---------------------------------------------------------------------------
+# list_available_lipids
+# ---------------------------------------------------------------------------
+
+def _parse_lipid_line(line: str) -> dict | None:
+    """Parse a single output line from ``packmol-memgen --available_lipids_all``.
+
+    Expected formats (examples from the tool):
+        POPC     charge:  0   1-palmitoyl-2-oleoyl-sn-glycero-3-phosphocholine
+        DOPE     charge: -1   ...
+    Returns None when the line does not match.
     """
-    available_area = membrane_x * membrane_y - cross_section
-    if available_area <= 0:
-        logger.warning(
-            "Available area (%.1f A^2) is non-positive; protein may be too large "
-            "for the specified membrane dimensions.",
-            available_area,
+    # Strip ANSI escape codes that some terminal-aware programs emit
+    ansi_escape = re.compile(r"\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])")
+    clean = ansi_escape.sub("", line).strip()
+
+    # Actual format: NAME    CHARGE    FULL_NAME    [COMMENT]
+    # e.g.: AHPA         -1               1-arachidonoyl-2-...
+    m = re.match(
+        r"^(?P<name>[A-Z][A-Z0-9]{2,5})\s+"
+        r"(?P<charge>-?\d+)\s+"
+        r"(?P<rest>.+)?$",
+        clean,
+    )
+    if not m:
+        return None
+
+    rest = (m.group("rest") or "").strip()
+    parts = rest.rsplit("  ", 1)
+    full_name = parts[0].strip() if parts else rest
+    comment = parts[1].strip() if len(parts) > 1 else ""
+    return {
+        "name": m.group("name"),
+        "charge": int(m.group("charge")),
+        "full_name": full_name,
+        "comment": comment,
+    }
+
+
+def _run_list_lipids() -> list[dict]:
+    """Blocking helper — run ``packmol-memgen --available_lipids_all``."""
+    cmd = [_get_executable("packmol-memgen"), "--available_lipids_all"]
+    logger.debug("list_available_lipids cmd: %s", " ".join(cmd))
+
+    try:
+        result = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            timeout=120,
+            env=_get_env(),
         )
-        return {name: 0 for name in lipid_composition}
+    except FileNotFoundError as exc:
+        raise RuntimeError(
+            f"packmol-memgen not found in {ENV_BIN}. "
+            "Make sure miniconda3/anaconda3 is installed."
+        ) from exc
+    except subprocess.TimeoutExpired as exc:
+        raise RuntimeError("packmol-memgen --available_lipids_all timed out.") from exc
 
-    total_lipids = available_area / lipid_area
+    output = result.stdout + result.stderr
+    lipids: list[dict] = []
+    for line in output.splitlines():
+        parsed = _parse_lipid_line(line)
+        if parsed:
+            lipids.append(parsed)
 
-    counts: dict[str, int] = {}
-    for name, fraction in lipid_composition.items():
-        counts[name] = max(int(math.floor(total_lipids * fraction)), 0)
-
-    return counts
+    return lipids
 
 
-def generate_packmol_input(
-    protein_pdb_path: str,
-    output_path: str,
-    lipid_counts: dict[str, int],
-    membrane_x: float,
-    membrane_y: float,
-    z_center: float,
-    bilayer_thickness: float,
-    water_padding: float,
-    water_density: float,
-    tolerance: float,
-    n_water_upper: int,
-    n_water_lower: int,
-) -> str:
-    """Generate Packmol input file content as a string.
+async def list_available_lipids() -> list[dict]:
+    """Return all lipids supported by ``packmol-memgen``.
 
-    Args:
-        protein_pdb_path: Path to the protein PDB file.
-        output_path: Path for the Packmol output PDB file.
-        lipid_counts: Dict mapping lipid name to count per leaflet.
-        membrane_x: Membrane X dimension in Angstroms.
-        membrane_y: Membrane Y dimension in Angstroms.
-        z_center: Z coordinate of the bilayer center.
-        bilayer_thickness: Thickness of the lipid bilayer in Angstroms.
-        water_padding: Water layer thickness above/below bilayer in Angstroms.
-        water_density: Water density in molecules per cubic Angstrom.
-        tolerance: Minimum distance between molecules in Angstroms.
-        n_water_upper: Number of water molecules above the upper leaflet.
-        n_water_lower: Number of water molecules below the lower leaflet.
+    Each entry is a dict::
 
-    Returns:
-        Packmol input file content as a string.
+        {
+            "name":      str,   # e.g. "POPC"
+            "charge":    int,   # net charge (0, -1, …)
+            "full_name": str,   # long name from the tool output
+            "comment":   str,   # additional comment (may be empty)
+        }
     """
-    half_thickness = bilayer_thickness / 2.0
-    xmin = -membrane_x / 2.0
-    xmax = membrane_x / 2.0
-    ymin = -membrane_y / 2.0
-    ymax = membrane_y / 2.0
+    return await asyncio.to_thread(_run_list_lipids)
 
-    z_upper_top = z_center + half_thickness
-    z_lower_bottom = z_center - half_thickness
-    z_water_top = z_upper_top + water_padding
-    z_water_bottom = z_lower_bottom - water_padding
 
-    water_pdb_path = str(LIPIDS_DIR / "water.pdb")
+# ---------------------------------------------------------------------------
+# build_membrane
+# ---------------------------------------------------------------------------
 
-    lines: list[str] = []
-    lines.append(f"tolerance {tolerance:.1f}")
-    lines.append("filetype pdb")
-    lines.append(f"output {output_path}")
-    lines.append("seed -1")
-    lines.append("")
+def _run_build_membrane(
+    *,
+    output_dir: Path,
+    pdb_filename: str,
+    cmd: list[str],
+    timeout: int,
+) -> dict:
+    """Blocking helper that actually executes ``packmol-memgen``."""
+    logger.info("build_membrane cwd=%s cmd=%s", output_dir, " ".join(cmd))
 
-    # Protein (fixed)
-    lines.append("# Protein (fixed)")
-    lines.append(f"structure {protein_pdb_path}")
-    lines.append("  number 1")
-    cx, cy, cz = 0.0, 0.0, z_center  # protein will be centered at origin in XY
-    lines.append(f"  fixed {cx:.3f} {cy:.3f} {cz:.3f} 0. 0. 0.")
-    lines.append("  center")
-    lines.append("end structure")
-    lines.append("")
-
-    # Lipids -- upper leaflet
-    for lipid_name, count in lipid_counts.items():
-        if count <= 0:
-            continue
-        upper_pdb = str(get_lipid_pdb_path(lipid_name, "upper"))
-        lines.append(f"# {lipid_name} upper leaflet")
-        lines.append(f"structure {upper_pdb}")
-        lines.append(f"  number {count}")
-        lines.append(
-            f"  inside box {xmin:.3f} {ymin:.3f} {z_center:.3f} "
-            f"{xmax:.3f} {ymax:.3f} {z_upper_top:.3f}"
+    try:
+        proc = subprocess.run(
+            cmd,
+            cwd=str(output_dir),
+            capture_output=False,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            timeout=timeout,
+            env=_get_env(),
         )
-        lines.append("end structure")
-        lines.append("")
+        full_log = proc.stdout or ""
+        returncode = proc.returncode
+    except FileNotFoundError as exc:
+        raise RuntimeError(
+            f"packmol-memgen not found in {ENV_BIN}. "
+            f"Searched in {CONDA_BASE}. "
+            "Ensure AmberTools25 conda env exists."
+        ) from exc
+    except subprocess.TimeoutExpired as exc:
+        raise RuntimeError(
+            f"packmol-memgen exceeded the {timeout}s timeout."
+        ) from exc
 
-    # Lipids -- lower leaflet
-    for lipid_name, count in lipid_counts.items():
-        if count <= 0:
-            continue
-        lower_pdb = str(get_lipid_pdb_path(lipid_name, "lower"))
-        lines.append(f"# {lipid_name} lower leaflet")
-        lines.append(f"structure {lower_pdb}")
-        lines.append(f"  number {count}")
-        lines.append(
-            f"  inside box {xmin:.3f} {ymin:.3f} {z_lower_bottom:.3f} "
-            f"{xmax:.3f} {ymax:.3f} {z_center:.3f}"
-        )
-        lines.append("end structure")
-        lines.append("")
+    # ------------------------------------------------------------------
+    # Collect output files
+    # ------------------------------------------------------------------
+    stem = Path(pdb_filename).stem  # filename without extension
 
-    # Water upper
-    if n_water_upper > 0:
-        lines.append("# Water upper (above upper leaflet)")
-        lines.append(f"structure {water_pdb_path}")
-        lines.append(f"  number {n_water_upper}")
-        lines.append(
-            f"  inside box {xmin:.3f} {ymin:.3f} {z_upper_top:.3f} "
-            f"{xmax:.3f} {ymax:.3f} {z_water_top:.3f}"
-        )
-        lines.append("end structure")
-        lines.append("")
+    # packmol-memgen names outputs like <stem>_lipid.pdb / .top / .crd
+    # but sometimes just <stem>.pdb when no protein is provided.
+    # Search flexibly.
+    pdb_candidates = sorted(output_dir.glob("*_lipid*.pdb")) + sorted(
+        output_dir.glob(f"{stem}*.pdb")
+    )
+    top_candidates = sorted(output_dir.glob("*.top")) + sorted(
+        output_dir.glob("*.prmtop")
+    )
+    crd_candidates = (
+        sorted(output_dir.glob("*.crd"))
+        + sorted(output_dir.glob("*.rst7"))
+        + sorted(output_dir.glob("*.inpcrd"))
+    )
 
-    # Water lower
-    if n_water_lower > 0:
-        lines.append("# Water lower (below lower leaflet)")
-        lines.append(f"structure {water_pdb_path}")
-        lines.append(f"  number {n_water_lower}")
-        lines.append(
-            f"  inside box {xmin:.3f} {ymin:.3f} {z_water_bottom:.3f} "
-            f"{xmax:.3f} {ymax:.3f} {z_lower_bottom:.3f}"
-        )
-        lines.append("end structure")
-        lines.append("")
+    output_pdb = str(pdb_candidates[0]) if pdb_candidates else None
+    output_top = str(top_candidates[0]) if top_candidates else None
+    output_crd = str(crd_candidates[0]) if crd_candidates else None
 
-    return "\n".join(lines)
+    # Last 30 lines of the log for the caller
+    log_tail = "\n".join(full_log.splitlines()[-30:])
+
+    return {
+        "success": returncode == 0,
+        "returncode": returncode,
+        "output_pdb": output_pdb,
+        "output_top": output_top,
+        "output_crd": output_crd,
+        "log": log_tail,
+        "command": " ".join(cmd),
+    }
 
 
 async def build_membrane(
     protein_pdb_path: str,
     output_dir: str = "./output",
-    lipid_composition: dict[str, float] | None = None,
-    membrane_x_size: float | None = None,
-    membrane_y_size: float | None = None,
-    bilayer_thickness: float = DEFAULT_BILAYER_THICKNESS,
-    water_padding: float = DEFAULT_WATER_PADDING,
-    lipid_area: float = DEFAULT_LIPID_AREA,
-    water_density: float = DEFAULT_WATER_DENSITY,
-    tolerance: float = DEFAULT_TOLERANCE,
+    lipids: str = "POPC",
+    ratio: str = "1",
+    distxy_fix: float | None = None,
+    dist: float = 15.0,
+    dist_wat: float = 17.5,
+    salt: bool = True,
+    salt_concentration: float = 0.15,
+    parametrize: bool = True,
+    ffprot: str = "ff19SB",
+    ffwat: str = "tip3p",
+    fflip: str = "lipid21",
+    preoriented: bool = False,
+    keep_ligands: bool = True,
+    keep_files: bool = True,
+    timeout: int = 7200,
 ) -> dict:
-    """Build a lipid bilayer membrane around a protein using Packmol.
+    """Run ``packmol-memgen`` and return paths to the generated files.
 
-    This is the main orchestration function that:
-    1. Parses the protein PDB
-    2. Calculates membrane dimensions and lipid counts
-    3. Generates the Packmol input file
-    4. Runs Packmol (if available)
+    Parameters
+    ----------
+    protein_pdb_path:
+        Absolute or relative path to the input protein PDB file.
+    output_dir:
+        Directory where output files will be placed.  Created if absent.
+    lipids:
+        Colon-separated lipid names, e.g. ``"POPC"`` or ``"DOPE:DOPG"``.
+    ratio:
+        Colon-separated molar ratios matching *lipids*, e.g. ``"3:1"``.
+    distxy_fix:
+        Fixed XY box size in Å.  ``None`` → packmol-memgen chooses automatically.
+    dist:
+        Minimum distance (Å) between the protein and the membrane edge.
+    dist_wat:
+        Water layer thickness in Å (default 17.5).
+    salt:
+        Whether to add KCl ions.
+    salt_concentration:
+        Ion concentration in mol/L (default 0.15 M).
+    parametrize:
+        Run ``tleap`` to generate AMBER topology/coordinate files.
+    ffprot:
+        Protein force field (``"ff14SB"`` or ``"ff19SB"``).
+    ffwat:
+        Water model (``"tip3p"``, ``"opc"``, ``"spce"``).
+    fflip:
+        Lipid force field (``"lipid21"`` or ``"lipid17"``).
+    preoriented:
+        Protein is already oriented along the membrane normal — skip OPM lookup.
+    keep_ligands:
+        Pass ``--keepligs`` to preserve HETATM ligand records.
+    keep_files:
+        Pass ``--keep`` to retain intermediate files.
+    timeout:
+        Wall-clock timeout in seconds (default 3600 = 1 hour).
 
-    Args:
-        protein_pdb_path: Path to the protein PDB file.
-        output_dir: Directory for output files.
-        lipid_composition: Dict mapping lipid names to mole fractions.
-            Defaults to DEFAULT_LIPID_COMPOSITION (pure POPC).
-        membrane_x_size: X dimension of the membrane in Angstroms.
-            If None, auto-calculated from protein bounding box.
-        membrane_y_size: Y dimension of the membrane in Angstroms.
-            If None, auto-calculated from protein bounding box.
-        bilayer_thickness: Bilayer thickness in Angstroms.
-        water_padding: Water layer padding in Angstroms.
-        lipid_area: Area per lipid in Angstroms squared.
-        water_density: Water molecule density in molecules per cubic Angstrom.
-        tolerance: Minimum distance between molecules in Angstroms.
-
-    Returns:
-        Dict with build results including lipid counts, water counts,
-        box dimensions, and packmol execution status.
+    Returns
+    -------
+    dict
+        ``success`` (bool), ``output_pdb``, ``output_top``, ``output_crd``,
+        ``log`` (last 30 lines), ``command`` (the shell command executed).
     """
-    if lipid_composition is None:
-        lipid_composition = dict(DEFAULT_LIPID_COMPOSITION)
+    # ------------------------------------------------------------------
+    # 1. Prepare output directory
+    # ------------------------------------------------------------------
+    out_dir = Path(output_dir).resolve()
+    out_dir.mkdir(parents=True, exist_ok=True)
 
-    # Step a: Parse protein PDB
-    pdb_data = parse_pdb(protein_pdb_path)
-    atoms = pdb_data["atoms"]
-    center = pdb_data["center"]
-    bbox = pdb_data["bbox"]
-    z_center = center[2]
+    # ------------------------------------------------------------------
+    # 2. Copy protein PDB into output_dir
+    #    packmol-memgen writes outputs in the *current working directory*,
+    #    so we run it with cwd=output_dir and hand it a bare filename.
+    # ------------------------------------------------------------------
+    src_pdb = Path(protein_pdb_path).resolve()
+    if not src_pdb.is_file():
+        raise FileNotFoundError(f"Protein PDB not found: {src_pdb}")
 
-    cross_section = estimate_cross_section(atoms, z_center, bilayer_thickness)
+    dest_pdb = out_dir / src_pdb.name
+    if src_pdb != dest_pdb:
+        shutil.copy2(src_pdb, dest_pdb)
+    pdb_filename = src_pdb.name  # relative, used as the --pdb argument
 
-    # Step b: Calculate membrane dimensions
-    if membrane_x_size is None:
-        membrane_x_size = bbox["size"][0] + DEFAULT_XY_PADDING * 2
-    if membrane_y_size is None:
-        membrane_y_size = bbox["size"][1] + DEFAULT_XY_PADDING * 2
+    # ------------------------------------------------------------------
+    # 3. Build the command
+    # ------------------------------------------------------------------
+    cmd: list[str] = [_get_executable("packmol-memgen")]
+    cmd += ["--pdb", pdb_filename]
+    cmd += ["--lipids", lipids]
+    cmd += ["--ratio", ratio]
 
-    # Step c: Calculate lipid counts per leaflet
-    lipid_counts = calculate_lipid_counts(
-        membrane_x=membrane_x_size,
-        membrane_y=membrane_y_size,
-        cross_section=cross_section,
-        lipid_composition=lipid_composition,
-        lipid_area=lipid_area,
+    if distxy_fix is not None:
+        cmd += ["--distxy_fix", str(distxy_fix)]
+
+    cmd += ["--dist", str(dist)]
+    cmd += ["--dist_wat", str(dist_wat)]
+
+    if salt:
+        cmd += ["--salt", "--saltcon", str(salt_concentration)]
+
+    if parametrize:
+        cmd += ["--parametrize"]
+
+    cmd += ["--ffprot", ffprot]
+    cmd += ["--ffwat", ffwat]
+    cmd += ["--fflip", fflip]
+
+    if preoriented:
+        cmd += ["--preoriented"]
+    if keep_ligands:
+        cmd += ["--keepligs"]
+    if keep_files:
+        cmd += ["--keep"]
+
+    cmd += ["--overwrite"]
+
+    # ------------------------------------------------------------------
+    # 4. Execute (non-blocking)
+    # ------------------------------------------------------------------
+    return await asyncio.to_thread(
+        _run_build_membrane,
+        output_dir=out_dir,
+        pdb_filename=pdb_filename,
+        cmd=cmd,
+        timeout=timeout,
     )
 
-    # Step d: Calculate water molecule counts
-    water_volume_upper = membrane_x_size * membrane_y_size * water_padding
-    water_volume_lower = membrane_x_size * membrane_y_size * water_padding
-    n_water_upper = int(math.floor(water_volume_upper * water_density))
-    n_water_lower = int(math.floor(water_volume_lower * water_density))
 
-    # Step e: Create output directory
-    os.makedirs(output_dir, exist_ok=True)
+# ---------------------------------------------------------------------------
+# analyze_protein
+# ---------------------------------------------------------------------------
 
-    # Step f & g: Generate and write packmol input
-    output_pdb_path = os.path.join(output_dir, "membrane.pdb")
-    inp_content = generate_packmol_input(
-        protein_pdb_path=os.path.abspath(protein_pdb_path),
-        output_path=os.path.abspath(output_pdb_path),
-        lipid_counts=lipid_counts,
-        membrane_x=membrane_x_size,
-        membrane_y=membrane_y_size,
-        z_center=z_center,
-        bilayer_thickness=bilayer_thickness,
-        water_padding=water_padding,
-        water_density=water_density,
-        tolerance=tolerance,
-        n_water_upper=n_water_upper,
-        n_water_lower=n_water_lower,
-    )
+def _parse_pdb_atoms(pdb_path: Path) -> list[dict]:
+    """Return a list of atom dicts from ATOM/HETATM lines in a PDB file."""
+    atoms: list[dict] = []
+    try:
+        with pdb_path.open("r", errors="replace") as fh:
+            for line in fh:
+                record = line[:6].strip()
+                if record not in ("ATOM", "HETATM"):
+                    continue
+                try:
+                    atoms.append(
+                        {
+                            "record": record,
+                            "serial": int(line[6:11]),
+                            "name": line[12:16].strip(),
+                            "resname": line[17:20].strip(),
+                            "chain": line[21].strip(),
+                            "resseq": int(line[22:26]),
+                            "x": float(line[30:38]),
+                            "y": float(line[38:46]),
+                            "z": float(line[46:54]),
+                        }
+                    )
+                except (ValueError, IndexError):
+                    continue
+    except OSError as exc:
+        raise FileNotFoundError(f"Cannot open PDB: {pdb_path}") from exc
+    return atoms
 
-    inp_file_path = os.path.join(output_dir, "membrane.inp")
-    with open(inp_file_path, "w") as f:
-        f.write(inp_content)
 
-    logger.info("Packmol input written to %s", inp_file_path)
+def _run_analyze_protein(protein_pdb_path: str) -> dict:
+    """Blocking analysis of a PDB file."""
+    pdb_path = Path(protein_pdb_path).resolve()
+    if not pdb_path.is_file():
+        raise FileNotFoundError(f"Protein PDB not found: {pdb_path}")
 
-    # Step h: Check if packmol is available
-    packmol_available = shutil.which("packmol") is not None
+    atoms = _parse_pdb_atoms(pdb_path)
 
-    packmol_success: bool | None = None
-    packmol_log: str = ""
+    if not atoms:
+        return {
+            "file": str(pdb_path),
+            "atom_count": 0,
+            "hetatm_count": 0,
+            "residue_count": 0,
+            "chains": [],
+            "bounding_box": None,
+            "error": "No ATOM/HETATM records found.",
+        }
 
-    if not packmol_available:
-        logger.warning(
-            "Packmol is not installed or not found in PATH. "
-            "Input file was generated but Packmol was not run."
-        )
-        packmol_log = "Packmol is not installed. Please install it and run manually."
-    else:
-        # Step i: Run packmol via asyncio.to_thread
-        def _run_packmol() -> subprocess.CompletedProcess:
-            return subprocess.run(
-                ["packmol"],
-                input=inp_content,
-                capture_output=True,
-                text=True,
-                timeout=600,
-            )
+    # Counts
+    atom_records = [a for a in atoms if a["record"] == "ATOM"]
+    hetatm_records = [a for a in atoms if a["record"] == "HETATM"]
 
-        try:
-            result = await asyncio.to_thread(_run_packmol)
-            stdout = result.stdout or ""
-            stderr = result.stderr or ""
+    # Unique residues: (chain, resseq, resname) tuples
+    residues: set[tuple] = set()
+    for a in atom_records:
+        residues.add((a["chain"], a["resseq"], a["resname"]))
 
-            # Step j: Check convergence
-            success_markers = ("Success", "ENDED WITHOUT SYMMETRY")
-            packmol_success = any(marker in stdout for marker in success_markers)
+    # Chains (from ATOM records only, preserving insertion order)
+    chains: list[str] = []
+    seen_chains: set[str] = set()
+    for a in atom_records:
+        c = a["chain"]
+        if c not in seen_chains:
+            chains.append(c)
+            seen_chains.add(c)
 
-            # Last 20 lines of stdout
-            stdout_lines = stdout.strip().splitlines()
-            packmol_log = "\n".join(stdout_lines[-20:])
-
-            if not packmol_success:
-                logger.warning("Packmol did not converge. stderr: %s", stderr)
-                if stderr:
-                    packmol_log += "\n--- stderr ---\n" + stderr
-
-        except subprocess.TimeoutExpired:
-            packmol_success = False
-            packmol_log = "Packmol timed out after 600 seconds."
-            logger.error("Packmol timed out.")
-        except Exception as exc:
-            packmol_success = False
-            packmol_log = f"Packmol execution failed: {exc}"
-            logger.error("Packmol execution failed: %s", exc)
-
-    # Step k: Build result dict
-    half_thickness = bilayer_thickness / 2.0
-    box_dimensions = {
-        "x": membrane_x_size,
-        "y": membrane_y_size,
-        "z_min": z_center - half_thickness - water_padding,
-        "z_max": z_center + half_thickness + water_padding,
+    # Bounding box from all atoms
+    xs = [a["x"] for a in atoms]
+    ys = [a["y"] for a in atoms]
+    zs = [a["z"] for a in atoms]
+    bounding_box = {
+        "x_min": min(xs), "x_max": max(xs),
+        "y_min": min(ys), "y_max": max(ys),
+        "z_min": min(zs), "z_max": max(zs),
+        "x_size": max(xs) - min(xs),
+        "y_size": max(ys) - min(ys),
+        "z_size": max(zs) - min(zs),
     }
 
     return {
-        "output_path": os.path.abspath(output_pdb_path),
-        "input_path": os.path.abspath(inp_file_path),
-        "n_lipids_upper": dict(lipid_counts),
-        "n_lipids_lower": dict(lipid_counts),
-        "n_water_upper": n_water_upper,
-        "n_water_lower": n_water_lower,
-        "box_dimensions": box_dimensions,
-        "protein_center": center,
-        "cross_section_area": cross_section,
-        "packmol_success": packmol_success,
-        "packmol_log": packmol_log,
+        "file": str(pdb_path),
+        "atom_count": len(atom_records),
+        "hetatm_count": len(hetatm_records),
+        "residue_count": len(residues),
+        "chains": chains,
+        "bounding_box": bounding_box,
     }
+
+
+async def analyze_protein(protein_pdb_path: str) -> dict:
+    """Analyze a PDB file and return basic structural information.
+
+    Returns
+    -------
+    dict
+        ``file``, ``atom_count``, ``hetatm_count``, ``residue_count``,
+        ``chains`` (list of chain IDs from ATOM records),
+        ``bounding_box`` (min/max/size for x, y, z in Å).
+    """
+    return await asyncio.to_thread(_run_analyze_protein, protein_pdb_path)

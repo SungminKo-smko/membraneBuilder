@@ -9,3 +9,17 @@ build/
 *.egg
 .pytest_cache/
 output/
+tools/
+
+# packmol-memgen intermediate files
+packmol.inp
+packmol.log
+packmol-memgen.log
+reduce_*.log
+PROT*.pdb
+WAT.pdb
+Cl-.pdb
+K+.pdb
+
+# large output PDBs
+examples/output_*/

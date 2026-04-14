@@ -5,11 +5,10 @@ build-backend = "hatchling.build"
 [project]
 name = "membrane-builder-mcp"
 version = "0.1.0"
-description = "MCP server for building lipid bilayer membranes around proteins using Packmol"
+description = "MCP server for building lipid bilayer membranes using AmberTools packmol-memgen with GROMACS output"
 requires-python = ">=3.10"
 dependencies = [
     "mcp[cli]>=1.2.0",
-    "numpy>=1.24.0",
 ]
 
 [project.optional-dependencies]
