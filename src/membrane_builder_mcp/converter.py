@@ -73,57 +73,56 @@ async def convert_amber_to_gromacs(
     gro_out = out_dir / f"{output_prefix}.gro"
     top_out = out_dir / f"{output_prefix}.top"
 
-    # 2. ParmEd 스크립트 생성
-    script_lines = [
-        f"parm {prmtop_path}",
-        f"loadRestrt {inpcrd_path}",
-        f"outparm {top_out} {gro_out}",
-        "quit",
-    ]
-    script_content = "\n".join(script_lines) + "\n"
-    logger.debug("ParmEd script:\n%s", script_content)
+    # 2. ParmEd Python API를 subprocess로 호출하여 GROMACS 형식 변환
+    #    ParmEd CLI의 outparm은 항상 AMBER 형식을 출력하므로,
+    #    Python API의 .save()를 사용해야 확장자 기반 형식 감지가 작동한다.
+    convert_script = f"""\
+import parmed, sys
+try:
+    parm = parmed.load_file('{prmtop_path}', xyz='{inpcrd_path}')
+    parm.save('{top_out}', overwrite=True)
+    parm.save('{gro_out}', overwrite=True)
+    print('Conversion successful')
+    print(f'Atoms: {{len(parm.atoms)}}')
+    print(f'Residues: {{len(parm.residues)}}')
+except Exception as e:
+    print(f'ERROR: {{e}}', file=sys.stderr)
+    sys.exit(1)
+"""
 
-    # 3. 스크립트를 임시 파일로 저장
-    with tempfile.NamedTemporaryFile(
-        mode="w",
-        suffix=".parmed.in",
-        delete=False,
-        dir=out_dir,
-    ) as tmp:
-        tmp.write(script_content)
-        tmp_path = tmp.name
+    def _run_conversion() -> subprocess.CompletedProcess:
+        python_exe = str(ENV_BIN / "python")
+        return subprocess.run(
+            [python_exe, "-c", convert_script],
+            capture_output=True,
+            text=True,
+            timeout=600,
+            env=_get_env(),
+        )
 
-    # 4. conda run으로 ParmEd 실행 (asyncio.to_thread로 래핑)
     try:
-        result = await asyncio.to_thread(_run_parmed, tmp_path)
+        result = await asyncio.to_thread(_run_conversion)
     except FileNotFoundError as exc:
-        logger.error("conda/parmed not found: %s", exc)
+        logger.error("python not found in conda env: %s", exc)
         return {
             "success": False,
             "gromacs_top": str(top_out),
             "gromacs_gro": str(gro_out),
             "log": str(exc),
         }
-    except subprocess.TimeoutExpired as exc:
-        logger.error("ParmEd timed out: %s", exc)
+    except subprocess.TimeoutExpired:
+        logger.error("ParmEd conversion timed out")
         return {
             "success": False,
             "gromacs_top": str(top_out),
             "gromacs_gro": str(gro_out),
-            "log": "ParmEd process timed out after 300 seconds.",
+            "log": "ParmEd conversion timed out after 600 seconds.",
         }
-    finally:
-        # 임시 스크립트 파일 정리
-        try:
-            Path(tmp_path).unlink(missing_ok=True)
-        except Exception:
-            pass
 
     log_text = (result.stdout or "") + (result.stderr or "")
 
-    # 5. 결과 확인 및 반환
     if result.returncode != 0:
-        logger.error("ParmEd failed (rc=%d):\n%s", result.returncode, log_text)
+        logger.error("ParmEd conversion failed (rc=%d):\n%s", result.returncode, log_text)
         return {
             "success": False,
             "gromacs_top": str(top_out),
