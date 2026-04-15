@@ -1,0 +1,5 @@
+source leaprc.gaff2
+FX0 = loadmol2 FX0.mol2
+loadamberparams FX0.frcmod
+saveoff FX0 FX0.lib
+quit

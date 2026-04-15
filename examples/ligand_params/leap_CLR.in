@@ -1,0 +1,5 @@
+source leaprc.gaff2
+CLR = loadmol2 CLR.mol2
+loadamberparams CLR.frcmod
+saveoff CLR CLR.lib
+quit

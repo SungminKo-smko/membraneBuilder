@@ -1,0 +1,103 @@
+Processing file: "FX0.pdb"
+Building His ring NH Hydrogens.
+Building or keeping OH & SH Hydrogens.
+Rotating existing OH & SH Hydrogens
+SKIPPED H( R 401 FX0 H44 ): R 401 FX0 O04  bonds- R 401 FX0 C27  (short bond)
+SKIPPED H( R 401 FX0 H43 ): R 401 FX0 O03  bonds- R 401 FX0 C20  (short bond)
+WARNING: R 401 FX0 O02  H atom too close to  R 401 FX0 C09  by 0.00684394A
+        you may need to adjust using -METALBump or -NONMETALBump.
+SKIPPED H( R 401 FX0 H42 ): R 401 FX0 O02  bonds- R 401 FX0 C09  (short bond)
+SKIPPED H( R 401 FX0 H41 ): R 401 FX0 O01  bonds- R 401 FX0 C08  (short bond)
+VDW dot density = 16/A^2
+Probe radius = 0.25A
+Orientation penalty scale = 9999 (999900%)
+Eliminate contacts within 3 bonds.
+Ignore atoms with |occupancy| <= 0.01 during adjustments.
+Waters ignored if B-Factor >= 40 or |occupancy| < 0.66
+Aromatic rings in amino acids accept hydrogen bonds.
+Flipping Asn, Gln and His groups.
+For each flip state, bumps where gap is more than 0.4A are indicated with '!'.
+Rotating NH3 Hydrogens.
+Not processing Met methyls.
+Found 0 hydrogens (0 hets)
+Standardized 0 hydrogens (0 hets)
+Added 42 hydrogens (42 hets)
+USER  MOD reduce.4.10.230211 H: found=0, std=0, add=42, rem=0, adj=0
+HETATM 8007  C1  FX0 R 401       3.768   9.310 -14.398  1.00 90.87           C
+HETATM 8008  C2  FX0 R 401       4.181   8.271 -17.154  1.00 90.87           C
+HETATM 8009  C10 FX0 R 401       4.446   9.507 -10.135  1.00 90.87           C
+HETATM 8010  C11 FX0 R 401       6.401  12.601  -7.716  1.00 90.87           C
+HETATM 8011  C12 FX0 R 401       6.814  12.445 -12.177  1.00 90.87           C
+HETATM 8012  C19 FX0 R 401       3.917   9.341  -5.805  1.00 90.87           C
+HETATM 8013  C18 FX0 R 401       3.659  11.492  -8.003  1.00 90.87           C
+HETATM 8014  C20 FX0 R 401       4.838  10.298  -4.855  1.00 90.87           C
+HETATM 8015  C13 FX0 R 401       6.609  11.897 -13.671  1.00 90.87           C
+HETATM 8016  C14 FX0 R 401       4.472   9.241  -7.299  1.00 90.87           C
+HETATM 8017  C15 FX0 R 401       5.368  11.455  -5.718  1.00 90.87           C
+HETATM 8018  C16 FX0 R 401       3.974  11.604 -12.264  1.00 90.87           C
+HETATM 8019  C17 FX0 R 401       4.758  10.403 -14.723  1.00 90.87           C
+HETATM 8020  C01 FX0 R 401       5.763  11.546 -10.041  1.00 90.87           C
+HETATM 8021  C02 FX0 R 401       6.320  11.250 -11.379  1.00 90.87           C
+HETATM 8022  C03 FX0 R 401       5.426  10.314  -9.369  1.00 90.87           C
+HETATM 8023  C04 FX0 R 401       5.162  10.642 -12.268  1.00 90.87           C
+HETATM 8024  C05 FX0 R 401       4.884  10.571  -7.918  1.00 90.87           C
+HETATM 8025  C06 FX0 R 401       5.889  11.171  -7.084  1.00 90.87           C
+HETATM 8026  C07 FX0 R 401       5.777  10.553 -13.542  1.00 90.87           C
+HETATM 8027  C08 FX0 R 401       6.914  12.374  -9.188  1.00 90.87           C
+HETATM 8028  C09 FX0 R 401       4.734   9.220 -11.578  1.00 90.87           C
+HETATM 8029  C21 FX0 R 401       7.466  13.119  -6.916  1.00 90.87           C
+HETATM 8030  C24 FX0 R 401       7.745  14.564  -7.312  1.00 90.87           C
+HETATM 8031  C25 FX0 R 401       4.506   9.764 -17.120  1.00 90.87           C
+HETATM 8032  C27 FX0 R 401       5.108  10.183 -18.456  1.00 90.87           C
+HETATM 8033  O01 FX0 R 401       8.014  11.675  -9.158  1.00 90.87           O
+HETATM 8034  O02 FX0 R 401       5.770   8.349 -11.665  1.00 90.87           O
+HETATM 8035  O03 FX0 R 401       5.865   9.595  -4.382  1.00 90.87           O
+HETATM 8036  O04 FX0 R 401       5.686  11.294 -18.563  1.00 90.87           O
+HETATM 8037  O05 FX0 R 401       5.028   9.415 -19.452  1.00 90.87           O
+HETATM 8038  C28 FX0 R 401       5.510  10.043 -15.997  1.00 90.87           C
+HETATM    0  H9  FX0 R 401       5.664  13.232  -7.725  1.00 90.87           H   new
+HETATM    0  H8  FX0 R 401       4.342   8.657  -9.679  1.00 90.87           H   new
+HETATM    0  H7  FX0 R 401       3.589   9.960 -10.089  1.00 90.87           H   new
+HETATM    0  H6  FX0 R 401       3.545   8.094 -17.865  1.00 90.87           H   new
+HETATM    0  H5  FX0 R 401       4.994   7.766 -17.315  1.00 90.87           H   new
+HETATM    0  H46 FX0 R 401       6.101  10.769 -16.251  1.00 90.87           H   new
+HETATM    0  H45 FX0 R 401       6.067   9.263 -15.846  1.00 90.87           H   new
+HETATM    0  H40 FX0 R 401       3.693  10.268 -16.959  1.00 90.87           H   new
+HETATM    0  H4  FX0 R 401       3.798   8.004 -16.304  1.00 90.87           H   new
+HETATM    0  H39 FX0 R 401       7.998  14.600  -8.248  1.00 90.87           H   new
+HETATM    0  H38 FX0 R 401       6.947  15.098  -7.172  1.00 90.87           H   new
+HETATM    0  H37 FX0 R 401       8.468  14.915  -6.769  1.00 90.87           H   new
+HETATM    0  H36 FX0 R 401       7.230  13.071  -5.976  1.00 90.87           H   new
+HETATM    0  H35 FX0 R 401       8.264  12.581  -7.036  1.00 90.87           H   new
+HETATM    0  H34 FX0 R 401       3.962   8.833 -12.020  1.00 90.87           H   new
+HETATM    0  H33 FX0 R 401       7.084  13.230  -9.612  1.00 90.87           H   new
+HETATM    0  H32 FX0 R 401       6.325   9.755 -13.604  1.00 90.87           H   new
+HETATM    0  H31 FX0 R 401       6.620  10.535  -7.037  1.00 90.87           H   new
+HETATM    0  H30 FX0 R 401       6.252   9.809  -9.307  1.00 90.87           H   new
+HETATM    0  H3  FX0 R 401       4.241   8.473 -14.271  1.00 90.87           H   new
+HETATM    0  H29 FX0 R 401       7.076  10.669 -11.203  1.00 90.87           H   new
+HETATM    0  H28 FX0 R 401       4.956  12.079 -10.115  1.00 90.87           H   new
+HETATM    0  H27 FX0 R 401       4.285  11.240 -14.851  1.00 90.87           H   new
+HETATM    0  H26 FX0 R 401       3.659  11.725 -11.355  1.00 90.87           H   new
+HETATM    0  H25 FX0 R 401       4.250  12.460 -12.627  1.00 90.87           H   new
+HETATM    0  H24 FX0 R 401       3.259  11.238 -12.808  1.00 90.87           H   new
+HETATM    0  H23 FX0 R 401       4.651  12.102  -5.809  1.00 90.87           H   new
+HETATM    0  H22 FX0 R 401       6.079  11.888  -5.220  1.00 90.87           H   new
+HETATM    0  H21 FX0 R 401       5.237   8.644  -7.307  1.00 90.87           H   new
+HETATM    0  H20 FX0 R 401       3.790   8.836  -7.858  1.00 90.87           H   new
+HETATM    0  H2  FX0 R 401       3.290   9.538 -13.585  1.00 90.87           H   new
+HETATM    0  H19 FX0 R 401       6.136  12.546 -14.216  1.00 90.87           H   new
+HETATM    0  H18 FX0 R 401       7.464  11.735 -14.100  1.00 90.87           H   new
+HETATM    0  H17 FX0 R 401       4.317  10.639  -4.111  1.00 90.87           H   new
+HETATM    0  H16 FX0 R 401       2.978  11.075  -8.554  1.00 90.87           H   new
+HETATM    0  H15 FX0 R 401       3.306  11.644  -7.112  1.00 90.87           H   new
+HETATM    0  H14 FX0 R 401       3.918  12.340  -8.397  1.00 90.87           H   new
+HETATM    0  H13 FX0 R 401       3.875   8.452  -5.419  1.00 90.87           H   new
+HETATM    0  H12 FX0 R 401       3.010   9.685  -5.823  1.00 90.87           H   new
+HETATM    0  H11 FX0 R 401       7.740  12.660 -11.986  1.00 90.87           H   new
+HETATM    0  H10 FX0 R 401       6.295  13.246 -12.003  1.00 90.87           H   new
+HETATM    0  H1  FX0 R 401       3.137   9.217 -15.129  1.00 90.87           H   new
+END
+If you publish work which uses reduce, please cite:
+Word, et. al. (1999) J. Mol. Biol. 285, 1735-1747.
+For more information see http://kinemage.biochem.duke.edu

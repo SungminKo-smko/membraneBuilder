@@ -27,6 +27,8 @@ async def build_membrane(
     preoriented: bool = False,
     keep_ligands: bool = True,
     keep_files: bool = True,
+    ligand_params: list[str] | None = None,
+    gaff2: bool = True,
     convert_to_gromacs: bool = True,
 ) -> str:
     """Build a membrane around a protein using packmol-memgen, then optionally convert to GROMACS format.
@@ -71,6 +73,8 @@ async def build_membrane(
             preoriented=preoriented,
             keep_ligands=keep_ligands,
             keep_files=keep_files,
+            ligand_params=ligand_params,
+            gaff2=gaff2,
         )
 
         if convert_to_gromacs and result.get("success") and parametrize:

@@ -1,0 +1,5 @@
+source leaprc.gaff2
+PLM = loadmol2 PLM.mol2
+loadamberparams PLM.frcmod
+saveoff PLM PLM.lib
+quit

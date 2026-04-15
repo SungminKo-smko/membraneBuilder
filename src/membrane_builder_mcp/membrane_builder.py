@@ -226,6 +226,8 @@ async def build_membrane(
     preoriented: bool = False,
     keep_ligands: bool = True,
     keep_files: bool = True,
+    ligand_params: list[str] | None = None,
+    gaff2: bool = True,
     timeout: int = 7200,
 ) -> dict:
     """Run ``packmol-memgen`` and return paths to the generated files.
@@ -323,6 +325,11 @@ async def build_membrane(
         cmd += ["--keepligs"]
     if keep_files:
         cmd += ["--keep"]
+    if ligand_params:
+        for lp in ligand_params:
+            cmd += ["--ligand_param", lp]
+    if gaff2:
+        cmd += ["--gaff2"]
 
     cmd += ["--overwrite"]
 
