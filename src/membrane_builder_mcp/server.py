@@ -4,7 +4,7 @@ import json
 
 from mcp.server.fastmcp import FastMCP
 
-from membrane_builder_mcp import membrane_builder, converter
+from membrane_builder_mcp import membrane_builder, converter, pdb_preprocessor, openmm_runner
 
 mcp = FastMCP("membrane-builder")
 
@@ -161,6 +161,119 @@ async def convert_to_gromacs(
             amber_inpcrd=amber_inpcrd,
             output_dir=output_dir,
             output_prefix=output_prefix,
+        )
+        return json.dumps(result, indent=2)
+    except Exception as exc:
+        return json.dumps({"success": False, "error": str(exc)}, indent=2)
+
+
+@mcp.tool()
+async def extract_protein_chains(
+    pdb_path: str,
+    chains: list[str],
+    keep_ligands: list[str] | None = None,
+    remove_waters: bool = True,
+    output_path: str | None = None,
+) -> str:
+    """Extract specific chains and ligands from a PDB file.
+
+    Use this to prepare a protein structure by keeping only the chains and
+    ligands of interest.  For example, extract GPCR19 (chain R) with its
+    ligands from a multi-chain cryo-EM complex before membrane building.
+
+    Args:
+        pdb_path: Path to the source PDB file (required).
+        chains: List of chain IDs to keep, e.g. ["R"]. Case-sensitive.
+        keep_ligands: Whitelist of HETATM residue names to keep, e.g. ["FX0", "CLR", "PLM"].
+            None means keep all non-water HETATMs in the selected chains.
+        remove_waters: Drop HOH records. Defaults to True.
+        output_path: Destination file. None auto-generates <stem>_extracted.pdb.
+
+    Returns:
+        JSON string with output_path, atom_count, hetatm_count, chains_found, ligands_found.
+    """
+    try:
+        result = await pdb_preprocessor.extract_chains(
+            pdb_path=pdb_path,
+            chains=chains,
+            keep_ligands=keep_ligands,
+            remove_waters=remove_waters,
+            output_path=output_path,
+        )
+        return json.dumps(result, indent=2)
+    except Exception as exc:
+        return json.dumps({"success": False, "error": str(exc)}, indent=2)
+
+
+@mcp.tool()
+async def run_md_simulation(
+    gro_path: str,
+    top_path: str,
+    output_dir: str = "./md_output",
+    minimize: bool = True,
+    min_max_iterations: int = 0,
+    nvt_steps: int = 50000,
+    npt_steps: int = 500000,
+    production_steps: int = 5000000,
+    temperature: float = 310.0,
+    pressure: float = 1.0,
+    timestep: float = 0.002,
+    nonbonded_cutoff: float = 1.2,
+    report_interval: int = 5000,
+    checkpoint_interval: int = 25000,
+    platform: str = "CUDA",
+    precision: str = "mixed",
+    gromacs_include_dir: str | None = None,
+) -> str:
+    """Run an OpenMM MD simulation using GROMACS input files (.gro + .top).
+
+    Executes a full membrane protein MD pipeline:
+    1. Energy minimization
+    2. NVT equilibration (with position restraints)
+    3. NPT equilibration (semiisotropic barostat, position restraints)
+    4. Production MD (restraints released)
+
+    Args:
+        gro_path: Path to the GROMACS .gro coordinate file (required).
+        top_path: Path to the GROMACS .top topology file (required).
+        output_dir: Directory for output files.
+        minimize: Whether to run energy minimization first.
+        min_max_iterations: Max minimization iterations.
+        nvt_steps: NVT equilibration steps (default 50000 = 100ps at 2fs).
+        npt_steps: NPT equilibration steps (default 500000 = 1ns at 2fs).
+        production_steps: Production MD steps (default 5000000 = 10ns at 2fs).
+        temperature: Temperature in Kelvin (default 310 K).
+        pressure: Pressure in bar (default 1.0 bar).
+        timestep: Integration timestep in ps (default 0.002 = 2fs).
+        nonbonded_cutoff: PME cutoff in nm (default 1.2).
+        report_interval: Steps between trajectory/energy writes.
+        checkpoint_interval: Steps between checkpoint saves.
+        platform: OpenMM platform — CUDA, OpenCL, or CPU. Auto-fallback.
+        precision: GPU precision — mixed, single, or double.
+        gromacs_include_dir: Path to GROMACS include dir for force field files.
+
+    Returns:
+        JSON string with success, stage, output_files, minimized_energy, final_temperature.
+    """
+    try:
+        result = await openmm_runner.run_openmm_simulation(
+            gro_path=gro_path,
+            top_path=top_path,
+            output_dir=output_dir,
+            minimize=minimize,
+            min_max_iterations=min_max_iterations,
+            nvt_steps=nvt_steps,
+            npt_steps=npt_steps,
+            production_steps=production_steps,
+            temperature=temperature,
+            pressure=pressure,
+            timestep=timestep,
+            nonbonded_cutoff=nonbonded_cutoff,
+            report_interval=report_interval,
+            checkpoint_interval=checkpoint_interval,
+            platform=platform,
+            precision=precision,
+            gromacs_include_dir=gromacs_include_dir,
         )
         return json.dumps(result, indent=2)
     except Exception as exc:
